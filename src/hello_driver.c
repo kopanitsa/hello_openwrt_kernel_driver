@@ -29,10 +29,12 @@
 #include <linux/io.h>
 #include <linux/types.h>
 #include <linux/cdev.h>
+#include <asm/uaccess.h> // copy_from_user, copy_to_user
 
-static unsigned int driver_major = 0; // dynamic allocation
-static struct cdev driver_cdev;
-static int simple_char_bufsize = 1;
+#define MODNAME "hello_driver"
+#define MINOR_COUNT 1 // 接続するマイナー番号数
+static dev_t dev_id;  // デバイス番号
+static struct cdev c_dev; // キャラクタデバイス構造体
 
 static int hello_open(struct inode* inode, struct file* filp )
 {
@@ -67,8 +69,8 @@ static const struct file_operations hello_fops = {
     .write      = hello_write,
     .open       = hello_open,
     .release    = hello_release,
+    .opctl      = NULL,
 };
-// static char buf[256];
 
 
 // loaded to below
@@ -77,47 +79,54 @@ static const struct file_operations hello_fops = {
 static int __init hello_driver_init(void)
 {
     printk(KERN_INFO "hello_driver loaded -s\n");
-    int major;
-    dev_t dev = MKDEV(driver_major, 0);
-    int cdev_err = 0;
 
-    if ( register_chrdev( 60, "hello_driver", &hello_fops ) ) {
-        printk( KERN_INFO "hello_driver init failed\n" );
-        return -EBUSY;
+    int ret;
+
+    ret = alloc_chrdev_region( &dev_id, // 最初のデバイス番号が入る
+                               0,  // マイナー番号の開始番号
+                               MINOR_COUNT, // 取得するマイナー番号数
+                               MODNAME // モジュール名
+        );
+    if( ret < 0 ){
+        printk( KERN_WARNING "alloc_chrdev_region failed\n" );
+        return ret;
     }
 
-    printk(KERN_INFO "hello_driver loaded -2\n");
-    // generate driver major
-    driver_major = major = MAJOR(dev);
+    // キャラクタデバイス初期化
+    // ファイルオペレーション構造体の指定もする
+    cdev_init( &c_dev, &hello_fops );
+    c_dev.owner = THIS_MODULE;
 
-    // generate character device
-    cdev_init(&driver_cdev, &hello_fops);
-    driver_cdev.owner = THIS_MODULE;
-
-    // add file to /dev
-    cdev_err = cdev_add(&driver_cdev, MKDEV(driver_major, 0), 1);
-    if ( cdev_err ) {
-        printk( KERN_INFO "hello_driver add failed\n" );
-        return -EBUSY;
+    // キャラクタデバイスの登録
+    // MINOR_COUNT が 1 でマイナー番号の開始番号が 0 なので /dev/modtest0 が
+    // 対応するスペシャルファイルになる
+    ret = cdev_add( &c_dev, dev_id, MINOR_COUNT );
+    if( ret < 0 ){
+        printk( KERN_WARNING "cdev_add failed\n" );
+        return ret;
     }
-
 
     printk(KERN_INFO "hello_driver loaded -e\n");
+    printk( KERN_INFO "hello major = %d\n", MAJOR( dev_id ) );
+    printk( KERN_INFO "hello minor = %d\n", MINOR( dev_id ) );
     return 0;
 }
 
 static void __exit hello_driver_exit (void)
 {
-    unregister_chrdev(60, "hello_driver");
+    // キャラクタデバイス削除
+    cdev_del( &c_dev );
+
+    // デバイス番号の返却
+    unregister_chrdev_region( dev_id, MINOR_COUNT );
+
     printk(KERN_INFO "Successfully removed hello_driver\n");
 }
 
-module_param(simple_char_bufsize, int, S_IRUGO| S_IWUSR);
 module_init(hello_driver_init);
 module_exit(hello_driver_exit);
 
-MODULE_LICENSE("Dual BSD/GPL");
-MODULE_AUTHOR("okada okada.takahiro111@gmail.com");
-MODULE_DESCRIPTION("for openwrt device driver study");
+MODULE_DESCRIPTION(MODNAME);
+MODULE_LICENSE("GPL2");
 
 
